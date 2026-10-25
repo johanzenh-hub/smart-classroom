@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Smart Classroom</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;padding:24px;background:#101827;color:#e8eef8;font:16px Arial,sans-serif}
+    main{max-width:760px;margin:auto}h1{margin-bottom:6px}.muted{color:#9aabc2}
+    .status{margin:20px 0;padding:12px 16px;border-radius:10px;background:#253247}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+    .card{padding:20px;border-radius:12px;background:#1b293b}.label{color:#9aabc2;font-size:14px}
+    .value{margin-top:10px;font-size:24px;font-weight:bold}.on{color:#67e8a5}.off{color:#ff8585}
+    .timer{height:8px;margin-top:14px;overflow:hidden;border-radius:8px;background:#34445b}
+    .bar{height:100%;width:0;background:#67e8a5;transition:width .2s}
+    .controls{margin-top:14px;display:flex;gap:8px}
+    button{flex:1;padding:10px;border:0;border-radius:8px;background:#34445b;color:#e8eef8;font-weight:bold;cursor:pointer}
+    button.selected{background:#16834f}button:disabled{opacity:.5;cursor:wait}
+    #controlStatus{min-height:20px;margin-top:12px}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Smart Classroom</h1>
+    <div class="muted">Remote ESP32 status and controls</div>
+    <div class="status off" id="connection">Waiting for ESP32...</div>
+    <section class="grid">
+      <article class="card"><div class="label">Motion sensor</div><div class="value" id="pir">--</div></article>
+      <article class="card">
+        <div class="label">Automation</div><div class="value" id="automation">--</div>
+        <div class="controls"><button id="automationOn">ON</button><button id="automationOff">OFF</button></div>
+      </article>
+      <article class="card">
+        <div class="label">Bulb / relay</div><div class="value" id="relay">--</div>
+        <div class="label" id="bulbMode">--</div>
+        <div class="controls"><button id="bulbOn">ON</button><button id="bulbOff">OFF</button></div>
+        <div class="label">Manual setting stays active until automation is toggled.</div>
+      </article>
+      <article class="card"><div class="label">Green LED</div><div class="value" id="green">--</div></article>
+      <article class="card"><div class="label">Red LED</div><div class="value" id="red">--</div></article>
+      <article class="card"><div class="label">Buzzer</div><div class="value" id="buzzer">--</div></article>
+      <article class="card">
+        <div class="label">Time until relay turns off</div>
+        <div class="value" id="countdown">--</div>
+        <div class="timer"><div class="bar" id="bar"></div></div>
+      </article>
+    </section>
+    <div class="muted" id="controlStatus" role="status"></div>
+  </main>
+  <script>
+    const connection = document.getElementById("connection");
+    const controlStatus = document.getElementById("controlStatus");
+    const controlButtons = [...document.querySelectorAll(".controls button")];
+
+    function show(id, active, yes, no) {
+      const element = document.getElementById(id);
+      element.textContent = active ? yes : no;
+      element.className = `value ${active ? "on" : "off"}`;
+    }
+
+    function showStatus(data) {
+      const status = data.status;
+      if (!data.online || !status) {
+        connection.textContent = "ESP32 offline - last seen " +
+          (data.lastSeen ? new Date(data.lastSeen).toLocaleTimeString() : "never");
+        connection.className = "status off";
+        for (const id of ["pir", "automation", "relay", "green", "red", "buzzer", "countdown"]) {
+          const element = document.getElementById(id);
+          element.textContent = "--";
+          element.className = "value";
+        }
+        document.getElementById("bulbMode").textContent = "--";
+        document.getElementById("bar").style.width = "0%";
+        return;
+      }
+
+      connection.textContent = "ESP32 connected - updated " + new Date(data.lastSeen).toLocaleTimeString();
+      connection.className = "status on";
+      show("pir", status.pir, "MOTION", "NO MOTION");
+      show("relay", status.relay, "ON", "OFF");
+      show("automation", status.automation, "ON", "OFF");
+      document.getElementById("bulbMode").textContent =
+        status.manualOverride ? "Manual control" : "Automatic control";
+      document.getElementById("automationOn").classList.toggle("selected", status.automation);
+      document.getElementById("automationOff").classList.toggle("selected", !status.automation);
+      document.getElementById("bulbOn").classList.toggle("selected", status.relay);
+      document.getElementById("bulbOff").classList.toggle("selected", !status.relay);
+      show("green", status.greenLed, "ON", "OFF");
+      show("red", status.redLed, "ON", "OFF");
+      show("buzzer", status.buzzer, "RINGING", "OFF");
+      const countdownVisible =
+        status.automation && !status.manualOverride && status.relay && !status.pir;
+      document.getElementById("countdown").textContent =
+        countdownVisible ? `${status.secondsRemaining} s` : "--";
+      document.getElementById("bar").style.width = countdownVisible
+        ? `${(status.secondsRemaining / status.offDelaySeconds) * 100}%`
+        : "0%";
+    }
+
+    async function refreshStatus() {
+      try {
+        const response = await fetch("/api/status", { cache: "no-store" });
+        if (!response.ok) throw new Error(`Status request failed (${response.status})`);
+        showStatus(await response.json());
+      } catch (error) {
+        connection.textContent = error.message;
+        connection.className = "status off";
+      }
+    }
+
+    async function sendControl(type, value) {
+      controlButtons.forEach(button => { button.disabled = true; });
+      controlStatus.textContent = "Sending command to ESP32...";
+      try {
+        const response = await fetch("/api/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type, value }),
+        });
+        if (!response.ok) throw new Error(`Command failed (${response.status})`);
+        controlStatus.textContent = "Command queued; waiting for ESP32.";
+      } catch (error) {
+        controlStatus.textContent = error.message;
+      } finally {
+        controlButtons.forEach(button => { button.disabled = false; });
+      }
+    }
+
+    document.getElementById("automationOn").onclick = () => sendControl("automation", true);
+    document.getElementById("automationOff").onclick = () => sendControl("automation", false);
+    document.getElementById("bulbOn").onclick = () => sendControl("bulb", true);
+    document.getElementById("bulbOff").onclick = () => sendControl("bulb", false);
+    refreshStatus();
+    setInterval(refreshStatus, 1500);
+  </script>
+</body>
+</html>

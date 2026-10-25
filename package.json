@@ -1,0 +1,13 @@
+{
+  "name": "smart-classroom-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Authenticated Render dashboard and command API for the Smart Classroom ESP32",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,4 +1,4 @@
-// Smart Classroom (ESP32): PIR -> Relay with off-delay, Serial Monitor, and WebSocket dashboard
+// Smart Classroom (ESP32): PIR relay automation, local dashboard, and Render cloud dashboard
 // Pins: PIR OUT=G27, Relay IN=G26, Buzzer+=G25, Green LED=G18, Red LED=G19
 // Serial Monitor: 115200 baud
 // Install the "WebSockets" library by Markus Sattler from Arduino Library Manager.
@@ -6,9 +6,46 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
+#include "device_config.h"
 
-const char *WIFI_SSID = "YOUR_WIFI_SSID";
-const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char RENDER_ROOT_CA[] PROGMEM = R"PEM(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)PEM";
 
 WebServer server(80);
 WebSocketsServer webSocket(81);
@@ -149,10 +186,34 @@ unsigned long lastMotion = 0;
 unsigned long buzzerStartedAt = 0;
 unsigned long lastPrint = 0;
 unsigned long lastBroadcast = 0;
+unsigned long lastCloudSnapshot = 0;
+unsigned long lastCloudError = 0;
 unsigned long lastWifiRetry = 0;
 int lastPir = -1;
 int lastCountdown = -1;
 bool dashboardStarted = false;
+bool cloudConfigured = true;
+
+struct CloudCommand {
+  char id[33];
+  bool automation;
+  bool value;
+};
+
+struct CloudStatus {
+  bool pir;
+  bool relay;
+  bool automation;
+  bool manualOverride;
+  bool greenLed;
+  bool redLed;
+  bool buzzer;
+  unsigned long secondsRemaining;
+  unsigned long offDelaySeconds;
+};
+
+QueueHandle_t cloudCommandQueue = nullptr;
+QueueHandle_t cloudStatusQueue = nullptr;
 
 void setRelay(bool on) {
   digitalWrite(RELAY_PIN, (on == RELAY_ACTIVE_LOW) ? LOW : HIGH);
@@ -232,6 +293,154 @@ void broadcastStatus(unsigned long now, int pir, bool greenLedOn, bool redLedOn)
   webSocket.broadcastTXT(message);
 }
 
+int cloudRequest(const char *method, const char *path, const String &payload, String &responseBody) {
+  if (!cloudConfigured || WiFi.status() != WL_CONNECTED) {
+    return -1;
+  }
+
+  WiFiClientSecure client;
+  client.setCACert(RENDER_ROOT_CA);
+  HTTPClient http;
+  String url = String(CLOUD_BASE_URL) + path;
+  if (!http.begin(client, url)) {
+    return -1;
+  }
+  http.setConnectTimeout(2500);
+  http.setTimeout(2500);
+  http.addHeader("Authorization", String("Bearer ") + DEVICE_TOKEN);
+  if (strcmp(method, "POST") == 0) {
+    http.addHeader("Content-Type", "application/json");
+  }
+
+  int result = strcmp(method, "POST") == 0
+      ? http.POST(payload)
+      : http.GET();
+  if (result > 0) {
+    responseBody = http.getString();
+  }
+  http.end();
+  return result;
+}
+
+void reportCloudFailure(int result) {
+  unsigned long now = millis();
+  if (result < 0 || result >= 400) {
+    if (now - lastCloudError >= 30000) {
+      lastCloudError = now;
+      Serial.print("Cloud request failed (HTTP ");
+      Serial.print(result);
+      Serial.println("). Check Wi-Fi, Render URL, and device token.");
+    }
+  }
+}
+
+void publishCloudStatus(const CloudStatus &status) {
+  String payload;
+  payload.reserve(220);
+  payload = "{\"pir\":";
+  payload += status.pir ? "true" : "false";
+  payload += ",\"relay\":";
+  payload += status.relay ? "true" : "false";
+  payload += ",\"automation\":";
+  payload += status.automation ? "true" : "false";
+  payload += ",\"manualOverride\":";
+  payload += status.manualOverride ? "true" : "false";
+  payload += ",\"greenLed\":";
+  payload += status.greenLed ? "true" : "false";
+  payload += ",\"redLed\":";
+  payload += status.redLed ? "true" : "false";
+  payload += ",\"buzzer\":";
+  payload += status.buzzer ? "true" : "false";
+  payload += ",\"secondsRemaining\":";
+  payload += status.secondsRemaining;
+  payload += ",\"offDelaySeconds\":";
+  payload += status.offDelaySeconds;
+  payload += "}";
+
+  String responseBody;
+  int result = cloudRequest("POST", "/device/status", payload, responseBody);
+  reportCloudFailure(result);
+}
+
+void acknowledgeCloudCommand(const String &commandId) {
+  String payload = "{\"id\":\"";
+  payload += commandId;
+  payload += "\"}";
+  String responseBody;
+  int result = cloudRequest("POST", "/device/ack", payload, responseBody);
+  reportCloudFailure(result);
+}
+
+void pollCloudCommand(String &lastAcceptedCommandId) {
+  String responseBody;
+  int result = cloudRequest("GET", "/device/command", "", responseBody);
+  if (result == 204) {
+    return;
+  }
+  if (result != 200) {
+    reportCloudFailure(result);
+    return;
+  }
+
+  int firstSeparator = responseBody.indexOf('|');
+  int secondSeparator = responseBody.indexOf('|', firstSeparator + 1);
+  if (firstSeparator <= 0 || secondSeparator <= firstSeparator + 1) {
+    Serial.println("Cloud command rejected: invalid response format.");
+    return;
+  }
+
+  String commandId = responseBody.substring(0, firstSeparator);
+  String commandType = responseBody.substring(firstSeparator + 1, secondSeparator);
+  String commandValue = responseBody.substring(secondSeparator + 1);
+  bool validCommandId = commandId.length() == 32;
+  for (unsigned int i = 0; validCommandId && i < commandId.length(); i++) {
+    char character = commandId.charAt(i);
+    validCommandId = (character >= '0' && character <= '9') ||
+                     (character >= 'a' && character <= 'f');
+  }
+  if (!validCommandId || (commandValue != "0" && commandValue != "1") ||
+      (commandType != "automation" && commandType != "bulb")) {
+    Serial.println("Cloud command rejected: invalid command fields.");
+    return;
+  }
+
+  if (commandId != lastAcceptedCommandId) {
+    CloudCommand command;
+    commandId.toCharArray(command.id, sizeof(command.id));
+    command.automation = commandType == "automation";
+    command.value = commandValue == "1";
+    xQueueOverwrite(cloudCommandQueue, &command);
+    lastAcceptedCommandId = commandId;
+  }
+  acknowledgeCloudCommand(commandId);
+}
+
+void cloudTask(void *parameter) {
+  String lastAcceptedCommandId;
+  unsigned long lastCommandPoll = 0;
+  unsigned long lastStatusPost = 0;
+  CloudStatus latestStatus = {};
+  bool hasStatus = false;
+
+  while (true) {
+    unsigned long now = millis();
+    if (cloudConfigured && WiFi.status() == WL_CONNECTED) {
+      if (now - lastCommandPoll >= 1500) {
+        lastCommandPoll = now;
+        pollCloudCommand(lastAcceptedCommandId);
+      }
+      if (xQueueReceive(cloudStatusQueue, &latestStatus, 0) == pdTRUE) {
+        hasStatus = true;
+      }
+      if (hasStatus && now - lastStatusPost >= 2500) {
+        lastStatusPost = now;
+        publishCloudStatus(latestStatus);
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
 void startDashboard() {
   if (dashboardStarted || WiFi.status() != WL_CONNECTED) {
     return;
@@ -268,6 +477,22 @@ void startDashboard() {
 void setup() {
   Serial.begin(115200);
   delay(500);
+
+  cloudConfigured =
+      strncmp(CLOUD_BASE_URL, "https://", 8) == 0 &&
+      strstr(CLOUD_BASE_URL, "YOUR-RENDER-SERVICE") == nullptr &&
+      strlen(DEVICE_TOKEN) >= 32 &&
+      strstr(DEVICE_TOKEN, "PASTE_THE_RENDER_DEVICE_TOKEN_HERE") == nullptr;
+  if (!cloudConfigured) {
+    Serial.println("Cloud controls disabled: configure CLOUD_BASE_URL and DEVICE_TOKEN in device_config.h.");
+  } else {
+    cloudCommandQueue = xQueueCreate(1, sizeof(CloudCommand));
+    cloudStatusQueue = xQueueCreate(1, sizeof(CloudStatus));
+    if (cloudCommandQueue == nullptr || cloudStatusQueue == nullptr) {
+      cloudConfigured = false;
+      Serial.println("Cloud controls disabled: unable to allocate FreeRTOS queues.");
+    }
+  }
 
   // Set relay OFF level first, then make it an output to avoid a startup click.
   digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);
@@ -309,6 +534,11 @@ void setup() {
     delay(1000);
   }
   Serial.println("Ready.");
+  if (cloudConfigured &&
+      xTaskCreate(cloudTask, "cloud", 16384, nullptr, 1, nullptr) != pdPASS) {
+    cloudConfigured = false;
+    Serial.println("Cloud controls disabled: unable to start the network task.");
+  }
 }
 
 void loop() {
@@ -326,6 +556,17 @@ void loop() {
     webSocket.loop();
   }
   updateBuzzer(now);
+
+  if (cloudConfigured && cloudCommandQueue != nullptr) {
+    CloudCommand command;
+    if (xQueueReceive(cloudCommandQueue, &command, 0) == pdTRUE) {
+      if (command.automation) {
+        setAutomation(command.value);
+      } else {
+        setManualBulb(command.value);
+      }
+    }
+  }
 
   int pir = digitalRead(PIR_PIN);
 
@@ -393,6 +634,28 @@ void loop() {
   if (dashboardStarted && WiFi.status() == WL_CONNECTED && now - lastBroadcast >= 500) {
     lastBroadcast = now;
     broadcastStatus(now, pir, greenLedOn, redLedOn);
+  }
+
+  if (cloudConfigured && cloudStatusQueue != nullptr && now - lastCloudSnapshot >= 1000) {
+    lastCloudSnapshot = now;
+    CloudStatus status = {
+      pir == HIGH,
+      relayOn,
+      automationEnabled,
+      manualBulbOverride,
+      greenLedOn,
+      redLedOn,
+      buzzerOn,
+      0,
+      OFF_DELAY_MS / 1000
+    };
+    if (automationEnabled && !manualBulbOverride && relayOn && pir == LOW) {
+      unsigned long elapsed = now - lastMotion;
+      if (elapsed < OFF_DELAY_MS) {
+        status.secondsRemaining = (OFF_DELAY_MS - elapsed + 999) / 1000;
+      }
+    }
+    xQueueOverwrite(cloudStatusQueue, &status);
   }
 
   delay(20);
