@@ -16,6 +16,8 @@
     .controls{margin-top:14px;display:flex;gap:8px}
     button{flex:1;padding:10px;border:0;border-radius:8px;background:#34445b;color:#e8eef8;font-weight:bold;cursor:pointer}
     button.selected{background:#16834f}button:disabled{opacity:.5;cursor:wait}
+    select{width:100%;margin-top:8px;padding:10px;border:0;border-radius:8px;background:#34445b;color:#e8eef8}
+    select:disabled{opacity:.5}
     #controlStatus{min-height:20px;margin-top:12px}
   </style>
 </head>
@@ -42,6 +44,13 @@
       <article class="card">
         <div class="label">Time until relay turns off</div>
         <div class="value" id="countdown">--</div>
+        <label class="label" for="offDelay">Turn off after no motion</label>
+        <select id="offDelay">
+          <option value="10">10 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="600">10 minutes</option>
+          <option value="1800">30 minutes</option>
+        </select>
         <div class="timer"><div class="bar" id="bar"></div></div>
       </article>
     </section>
@@ -88,6 +97,7 @@
       show("green", status.greenLed, "ON", "OFF");
       show("red", status.redLed, "ON", "OFF");
       show("buzzer", status.buzzer, "RINGING", "OFF");
+      document.getElementById("offDelay").value = String(status.offDelaySeconds);
       const countdownVisible =
         status.automation && !status.manualOverride && status.relay && !status.pir;
       document.getElementById("countdown").textContent =
@@ -130,6 +140,24 @@
     document.getElementById("automationOff").onclick = () => sendControl("automation", false);
     document.getElementById("bulbOn").onclick = () => sendControl("bulb", true);
     document.getElementById("bulbOff").onclick = () => sendControl("bulb", false);
+    document.getElementById("offDelay").onchange = async event => {
+      const selector = event.currentTarget;
+      selector.disabled = true;
+      controlStatus.textContent = "Updating turn-off delay...";
+      try {
+        const response = await fetch("/api/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "delay", value: Number(selector.value) }),
+        });
+        if (!response.ok) throw new Error(`Delay update failed (${response.status})`);
+        controlStatus.textContent = "Turn-off delay queued; waiting for ESP32.";
+      } catch (error) {
+        controlStatus.textContent = error.message;
+      } finally {
+        selector.disabled = false;
+      }
+    };
     refreshStatus();
     setInterval(refreshStatus, 1500);
   </script>
