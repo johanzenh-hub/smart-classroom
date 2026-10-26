@@ -131,12 +131,17 @@ function createApp({ deviceToken, dashboardUsername, dashboardPassword }) {
     if (request.method === "POST" && url.pathname === "/api/command") {
       try {
         const body = await readJson(request);
+        const validCommand =
+          (["automation", "bulb"].includes(body?.type) && typeof body.value === "boolean") ||
+          (body?.type === "delay" && Number.isInteger(body.value) &&
+            [10, 60, 600, 1800].includes(body.value));
         if (
           !body ||
-          !["automation", "bulb"].includes(body.type) ||
-          typeof body.value !== "boolean"
+          !validCommand
         ) {
-          send(response, 400, JSON.stringify({ error: "Expected type=automation|bulb and a boolean value." }));
+          send(response, 400, JSON.stringify({
+            error: "Expected automation|bulb with a boolean value, or delay with 10, 60, 600, or 1800 seconds.",
+          }));
           return;
         }
         pendingCommand = {
@@ -162,7 +167,8 @@ function createApp({ deviceToken, dashboardUsername, dashboardPassword }) {
         return;
       }
       const { id, type, value } = pendingCommand;
-      send(response, 200, `${id}|${type}|${value ? 1 : 0}`, "text/plain; charset=utf-8");
+      const encodedValue = type === "delay" ? value : value ? 1 : 0;
+      send(response, 200, `${id}|${type}|${encodedValue}`, "text/plain; charset=utf-8");
       return;
     }
 
